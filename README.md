@@ -1,6 +1,29 @@
-# Frame Assist
+# Project Description
 
 This project provides a fully working, configurable "OS" suite for the Frame, including menus, settings, and a basic HUD.
+
+# Installation
+
+Installation should be fairly simple, provided you have an relatively recent (3.10+) version of Python installed.
+
+Simply clone the git repository, create a venv or similar, and install the requirements. On Linux:
+```bash
+git clone https://github.com/atmaranto/frame-assist
+cd frame-assist
+python -m venv frame-assist-venv
+source frame-assist-venv/bin/activate
+pip install -r requirements.txt
+```
+On Windows:
+```bat
+git clone https://github.com/atmaranto/frame-assist
+cd frame-assist
+python -m venv frame-assist-venv
+frame-assist-venv\Scripts\activate.bat
+pip install -r requirements.txt
+```
+
+# Usage
 
 ## The Menu
 
