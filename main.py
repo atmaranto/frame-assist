@@ -31,10 +31,16 @@ def load_default_bot():
     from langchain_core.runnables import RunnableLambda
     from langchain_ollama import ChatOllama
     from langchain_community.tools import BraveSearch
+
     orig_model = ChatOllama(model="qwen3:8b", extract_reasoning=True) #llama3.1:8b-instruct-q6_K
-    tools = [
-        BraveSearch(),
-    ]
+    tools = []
+
+    if "BRAVE_SEARCH_API_KEY" in os.environ:
+        tools.append(BraveSearch())
+    else:
+        print("Brave Search API key not found in environment variables. Skipping BraveSearch tool.")
+    
+
     orig_model = orig_model.bind_tools(tools)
 
     # import code; code.interact(local=locals())

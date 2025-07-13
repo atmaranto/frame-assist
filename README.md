@@ -25,6 +25,35 @@ pip install -r requirements.txt
 
 # Usage
 
+To run the frame-assist system, ensure Bluetooth is enabled on your device.
+Then, run
+```
+python main.py --resend
+```
+
+This will connect to the Frame device, send `lua-repl.lua`, and connect a REPL. This REPL allows you to test and debug the lua script more easily.
+
+To reconnect without resending the script (which can take up to 30 seconds), simply run:
+
+```
+python main.py
+```
+
+Note that `main.py` comes with a few options:
+```bash
+usage: main.py [-h] [--save-audio SAVE_AUDIO] [--resend] [--model-size MODEL_SIZE]
+
+Lua REPL for Frame device
+
+options:
+  -h, --help            show this help message and exit
+  --save-audio SAVE_AUDIO
+                        Path to save audio data
+  --resend              Resend the main Lua file and standard libraries
+  --model-size MODEL_SIZE
+                        Whisper model size to use for transcription
+```
+
 ## The Menu
 
 Single tap and wait one half second to go to the menu. Choose your option by *tilting* your head right and left. Select by tapping.
