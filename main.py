@@ -118,7 +118,7 @@ async def main(args, model=None, tools=None, chat_history=None):
             image_data.append(bytes(data[1:]))
             print(f"Received {len(data)} bytes of image data, total {sum(len(d) for d in image_data)} bytes")
 
-        assistant = Assistant(llm=model, model=WhisperModel(args.model_size, device="cpu", local_files_only=False), wake_words=["hey frame", "hey rain", "hey brain", "hey frank"], configuration={"session_id": "frame"})
+        assistant = Assistant(llm=model, model=WhisperModel(args.model_size, device="cpu", local_files_only=False), wake_words=args.wake_words.split(","), true_wake_word="hey frame", configuration={"session_id": "frame"})
         
         if args.save_audio:
             ext = os.path.splitext(args.save_audio)[1]
@@ -266,5 +266,6 @@ if __name__ == "__main__":
     parser.add_argument('--save-audio', default=None, help="Path to save audio data")
     parser.add_argument('--resend', action='store_true', help="Resend the main Lua file and standard libraries")
     parser.add_argument('--model-size', default='Systran/faster-distil-whisper-large-v2', help="Whisper model size to use for transcription")
+    parser.add_argument('--wake-words', default="hey frame,hey rain,hey brain,hey frank", help="Comma-separated list of wake words to use")
     args = parser.parse_args()
     asyncio.run(main(args, *load_default_bot()))
