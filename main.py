@@ -125,7 +125,7 @@ async def main(args, model=None, tools=None, chat_history=None):
             if ext not in ['.wav']:
                 args.save_audio += '.wav'
 
-            audio_proc = subprocess.Popen(['ffmpeg', '-f', 's16le', '-ar', '16000', '-ac', '1', '-i', '-', '-y', args.save_audio], stdin=subprocess.PIPE, bufsize=1024)
+            audio_proc = subprocess.Popen(['ffmpeg', '-loglevel', 'error', '-hide_banner', '-f', 's16le', '-ar', '16000', '-ac', '1', '-i', '-', '-y', args.save_audio], stdin=subprocess.PIPE, bufsize=1024)
             atexit.register(audio_proc.stdin.close, input=b'', timeout=5)
             audio_file = open(args.save_audio + ".s16le", 'wb')
         def mic_data_handler(data):
