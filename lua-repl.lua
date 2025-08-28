@@ -119,11 +119,11 @@ function calculateTiltCompensatedHeading(imu)
             calibration.maxZ = math.max(imu.compass.z, calibration.maxZ)
             calibration.nPoints = calibration.nPoints + 1
 
-            send(string.format("Calibrating step %d, minX: %.2f, maxX: %.2f, minY: %.2f, maxY: %.2f, minZ: %.2f, maxZ: %.2f",
-                calibration.nPoints,
-                calibration.minX, calibration.maxX,
-                calibration.minY, calibration.maxY,
-                calibration.minZ, calibration.maxZ))
+            print(string.format("Calibrating step %d, minX: %.2f, maxX: %.2f, minY: %.2f, maxY: %.2f, minZ: %.2f, maxZ: %.2f",
+                  calibration.nPoints,
+                  calibration.minX, calibration.maxX,
+                  calibration.minY, calibration.maxY,
+                  calibration.minZ, calibration.maxZ))
             return 0
         end
     end
@@ -531,8 +531,11 @@ while true do
     process_bluetooth()
     local imu
     if (calibration.calibrating and i % 20 == 0) or i % 30 == 0 then
+        send("A")
         imu = frame.imu.direction()
+        send("B")
         imu.heading = calculateTiltCompensatedHeading(frame.imu.raw())
+        send("C")
     end
     if i % fps == 0 then
         if menu ~= nil then
