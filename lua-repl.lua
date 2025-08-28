@@ -270,7 +270,8 @@ function single_tap_callback()
 end
 
 exposure_settings = {
-    exposure=0.1
+    exposure=0.9,
+    shutter_limit=100
 }
 
 function double_tap_callback()

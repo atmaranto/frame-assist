@@ -266,6 +266,6 @@ if __name__ == "__main__":
     parser.add_argument('--save-audio', default=None, help="Path to save audio data")
     parser.add_argument('--resend', action='store_true', help="Resend the main Lua file and standard libraries")
     parser.add_argument('--model-size', default='Systran/faster-distil-whisper-large-v2', help="Whisper model size to use for transcription")
-    parser.add_argument('--wake-words', default="hey frame,hey rain,hey brain,hey frank", help="Comma-separated list of wake words to use")
+    parser.add_argument('--wake-words', default="hey frame,hey rain,hey brain,hey frank,hey fraim,hey graham", help="Comma-separated list of wake words to use")
     args = parser.parse_args()
     asyncio.run(main(args, *load_default_bot()))
