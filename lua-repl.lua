@@ -508,19 +508,10 @@ local last_bat = frame.battery_level()
 local width = 50
 local height = 50
 collectgarbage('collect')
---[[
-local tbl = {}
-local repLine = string.rep("\x01\x23\x45\x67\x89\xAB\xCD\xEF", width // 4)
-for i=1,height do
-    tbl[i] = repLine
-end
-local bitmap = table.concat(tbl)
-tbl = nil
-repLine = nil
-]]
+
 local width = 500
 local yOffset = 80
--- local bitmap = string.rep("\x77", width * 80)
+
 collectgarbage('collect')
 
 frame.imu.tap_callback(tap_callback)
@@ -556,7 +547,7 @@ while true do
     end
 
     if last_tap ~= nil and menu ~= nil then
-        local idx = math.floor(menu.cursor + 0.5) % #menu.items + 1
+        local idx = math.floor((menu.cursor or #menu.items) + 0.5) % #menu.items + 1
         item = menu.items[idx]
         menu = nil
         item:callback()
@@ -613,32 +604,6 @@ while true do
 
     frame.sleep(0.001)
 end
-
---[[
-x = 1
-y = 1
-dX = 1
-dY = 1
-while true do
-    local bat = frame.battery_level()
-    frame.display.text("|\n|", 1, 1, {color="RED"})
-    frame.display.text("|\n|", 580, 380, {color="RED"})
-    frame.display.text("Loading... (bat " .. bat .. "%)", x, y)
-    frame.display.show()
-
-    x = x + dX
-    y = y + dY
-    if x > 500 or x < 2 then
-        dX = -dX
-    end
-    if y > 300 or y < 2 then
-        dY = -dY
-    end
-
-    frame.sleep(0.2)
-end
-
-]]
 end
 
 while true do
