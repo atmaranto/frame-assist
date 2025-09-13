@@ -16,13 +16,12 @@ import re
 
 import datetime
 
-import sys
-sys.path.append(os.path.join(os.environ.get("HOME", os.path.abspath('..')), "VirtualAssistant"))
-
 from faster_whisper import WhisperModel
 
 from assistant import Assistant
 from assistant.assistant import create_basic_llm
+
+import colorama
 
 import dotenv
 dotenv.load_dotenv()
@@ -30,7 +29,7 @@ dotenv.load_dotenv()
 def load_default_bot():
     from langchain_core.runnables import RunnableLambda
     from langchain_ollama import ChatOllama
-    from langchain_community.tools import BraveSearch
+    from langchain_community.tools import BraveSearch, tool
 
     orig_model = ChatOllama(model="qwen3:8b", extract_reasoning=True) #llama3.1:8b-instruct-q6_K
     tools = []
@@ -40,6 +39,12 @@ def load_default_bot():
     else:
         print("Brave Search API key not found in environment variables. Skipping BraveSearch tool.")
     
+    @tool
+    def get_time():
+        """Get the current time in a human-readable format."""
+        return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    tools.append(get_time)
 
     orig_model = orig_model.bind_tools(tools)
 
@@ -118,7 +123,7 @@ async def main(args, model=None, tools=None, chat_history=None):
             image_data.append(bytes(data[1:]))
             print(f"Received {len(data)} bytes of image data, total {sum(len(d) for d in image_data)} bytes")
 
-        assistant = Assistant(llm=model, model=WhisperModel(args.model_size, device="cpu", local_files_only=False), wake_words=args.wake_words.split(","), true_wake_word="hey frame", configuration={"session_id": "frame"})
+        assistant = Assistant(llm=model, model=WhisperModel(args.model_size, device="auto", local_files_only=False), wake_words=args.wake_words.split(","), true_wake_word="hey frame", configuration={"session_id": "frame"})
         
         if args.save_audio:
             ext = os.path.splitext(args.save_audio)[1]
@@ -166,46 +171,70 @@ async def main(args, model=None, tools=None, chat_history=None):
         def tool_call(tool, responses):
             for t in tools:
                 if t.name == tool["name"]:
-                    response = t(tool["args"])
+                    response = t.invoke(tool["args"])
                     if response is not None:
                         responses.append(response)
         partial_word = ""
-        def speak_word(part):
-            nonlocal partial_word
+        in_thinking = False
+        async def speak_word(part):
+            nonlocal partial_word, in_thinking
+            if part is None:
+                in_thinking = False
+            else:
+                if "<think>" in partial_word:
+                    in_thinking = True
+                if "</think>" in partial_word:
+                    in_thinking = False
             if part is None:
                 if partial_word:
+                    print(f"{colorama.Fore.GREEN}{partial_word}{colorama.Style.RESET_ALL}\n", end='', flush=True)
+                    if "</think>" in partial_word:
+                        partial_word = partial_word[partial_word.index("</think>") + len("</think>"):]
                     espeak_process.stdin.write(partial_word + "\n")
                     espeak_process.stdin.flush()
+                    await frame.send_message(MESSAGE_BASE + 6, partial_word.strip().encode('utf-8'))
                     partial_word = ""
             else:
                 partial_word += part
                 if any(c in partial_word for c in '.!?'):
                     words = partial_word.strip()
                     sents = re.split(r'(?<=[.!?])', words)
-                    print(sents)
                     for sent in sents:
-                        espeak_process.stdin.write(sent + "\n")
-                        espeak_process.stdin.flush()
+                        print(f"{colorama.Fore.GREEN}{sent}{colorama.Style.RESET_ALL} ", end='', flush=True)
+                    idx = 0
+                    if "</think>" in partial_word:
+                        idx = partial_word.index("</think>") + len("</think>")
+                    sents = re.split(r'(?<=[.!?])', words[idx:])
+                    if not in_thinking:
+                        for sent in sents:
+                            await frame.send_message(MESSAGE_BASE + 6, sent.strip().encode('utf-8'))
+                            espeak_process.stdin.write(sent + "\n")
+                            espeak_process.stdin.flush()
                     partial_word = ""
         
+        loop = asyncio.get_event_loop()
         assistant.on('tool', tool_call)
-        assistant.on('assistant_speak_word', speak_word)
-        assistant.on('assistant_speak', lambda text: speak_word(None))
+        assistant.on('assistant_speak_word', lambda word: loop.create_task(speak_word(word)))
+        assistant.on('assistant_speak', lambda text: asyncio.run_coroutine_threadsafe(speak_word(None), loop))
         
         # await frame.send_lua("frame.display.text('Loading... ' .. frame.battery_level(), 1, 1);frame.display.show();print(0)", await_print=True)
         if args.resend:
             await resend(frame, data_received, print_response_handler, 'lua-repl.lua')
         
         async def sync_time():
-            utc_offset = int(datetime.datetime.now(datetime.UTC).timestamp() - datetime.datetime.now().timestamp())
+            utc_offset = int(datetime.datetime.now().astimezone().utcoffset().total_seconds())
             timezone = f"{utc_offset // 3600:+d}:{round(utc_offset % 3600 // 60 / 15) * 15 % 60:02d}"
             await frame.send_message(MESSAGE_BASE + 1, str(datetime.datetime.now(datetime.UTC).timestamp()).encode() + b"\n" + timezone.encode())
 
         await sync_time()
+        await frame.send_message(MESSAGE_BASE + 5, b'SEABLUE,Connected') # Clear any existing connection message
 
         try:
             while True:
                 data = await aioconsole.ainput("> ")
+                if not data.strip():
+                    continue
+
                 # print(repr(data))
                 if data == '.exit' or data == '.exit break':
                     if 'break' in data:
@@ -235,6 +264,7 @@ async def main(args, model=None, tools=None, chat_history=None):
                     continue
                 elif data == '.resync':
                     await sync_time()
+                    await frame.send_message(MESSAGE_BASE + 5, b'SEABLUE,Time Resynced')
                     continue
                 elif data.startswith('.'):
                     print(f"Unknown command: {data}")
@@ -254,6 +284,7 @@ async def main(args, model=None, tools=None, chat_history=None):
                 data_received.clear()
         finally:
             # await frame.send_break_signal()
+            await frame.send_message(MESSAGE_BASE + 5, b'RED,Disconnected') # Exiting
             await frame.disconnect()
 
     except Exception as e:
@@ -267,5 +298,6 @@ if __name__ == "__main__":
     parser.add_argument('--resend', action='store_true', help="Resend the main Lua file and standard libraries")
     parser.add_argument('--model-size', default='Systran/faster-distil-whisper-large-v2', help="Whisper model size to use for transcription")
     parser.add_argument('--wake-words', default="hey frame,hey rain,hey brain,hey frank,hey fraim,hey graham", help="Comma-separated list of wake words to use")
+    parser.add_argument('--device', default='auto', help="Device to use for Whisper model (auto, cpu, cuda, etc.)")
     args = parser.parse_args()
     asyncio.run(main(args, *load_default_bot()))

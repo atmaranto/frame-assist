@@ -9,3 +9,4 @@ langchain-core
 faster-whisper
 pywin32; sys_platform == "win32"
 simple-virtual-assistant
+colorama

@@ -74,7 +74,9 @@ You can enable or disable HUD components in the menu.
 
 ### Microphone
 
-By default, the microphone is ENABLED. All microphone activity will be sent to the accompanying program and transcribed. Language that SEEMS to begin with "hey frame" or a similar-sounding word will be responded to via the packaged `simple-virtual-assistant`.
+By default, the microphone is DISABLED. When it is enabled, all microphone activity will be sent to the accompanying program and transcribed. Language that SEEMS to begin with "hey frame" or a similar-sounding word will be responded to via the packaged `simple-virtual-assistant`.
+
+However, the microphone **slows down** the Frame significantly. If you don't currently need an assistant, I'd strongly recommend keeping it Disabled until you need it.
 
 ### LICENSE
 

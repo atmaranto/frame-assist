@@ -22,16 +22,78 @@ function send(...)
                 frame.sleep(0.001)
             else
                 tx = tx + #chunk + 1
-                return
+                break
             end
         end
     end
 end
 
+function reset_calibration()
+    settings.calibration = {
+        minX = math.huge,
+        maxX = -math.huge,
+        minY = math.huge,
+        maxY = -math.huge,
+        minZ = math.huge,
+        maxZ = -math.huge,
+        nPoints = 0,
+        calibrating = true
+    }
+    send("Calibration reset. Start moving the device to calibrate the magnetometer.")
+end
+
+function load_settings()
+    local status, settings_data = pcall(require, "settings")
+    if status and (not settings_data.calibration or not settings_data.display_settings) then
+        status = false
+    end
+    if status then
+        settings = settings_data
+        if settings.calibration.calibrating then
+            send("Calibration loaded. Start moving the device to calibrate the magnetometer.")
+        else
+            local calibration = settings.calibration
+            send("Calibration loaded. Offsets: " .. calibration.offsetX .. ", " .. calibration.offsetY .. ", " .. calibration.offsetZ)
+        end
+    else
+        settings = {
+            send_mic = false,
+            calibration = nil,
+            display_settings = {
+                battery = true,
+                date = true,
+                compass = true,
+                llm_response = true,
+                tx_rx = true
+            },
+            exposure = {
+                exposure=0.9,
+                shutter_limit=16383,
+                analog_gain_limit=128,
+                rgb_gain_limit=150
+            }
+        }
+        reset_calibration()
+    end
+end
+
+function save_settings()
+    local file = frame.file.open("settings.lua", "write")
+    if file then
+        file:write("return " .. print_table(settings))
+        file:close()
+        send("Calibration saved.")
+    else
+        send("Failed to save settings.")
+    end
+end
+
+load_settings()
+
 local last_tap = nil
 function tap_callback()
     local time = frame.time.utc()
-    if calibration.calibrating then
+    if settings.calibration.calibrating then
         -- Ignore tap when calibrating
         return
     end
@@ -55,53 +117,11 @@ function print_table(t, indent)
             table.insert(result, prefix .. tostring(k) .. "=" .. tostring(v))
         end
     end
-    return "{\n" .. table.concat(result, ",\n") .. "\n" .. string.rep("    ", indent - 1) .. "}"
+    return string.rep("    ", indent - 1) .. "{\n" .. table.concat(result, ",\n") .. "\n" .. string.rep("    ", indent - 1) .. "}"
 end
-
-local calibrating = false
--- local calibration
-function reset_calibration()
-    calibration = {
-        minX = math.huge,
-        maxX = -math.huge,
-        minY = math.huge,
-        maxY = -math.huge,
-        minZ = math.huge,
-        maxZ = -math.huge,
-        nPoints = 0,
-        calibrating = true
-    }
-    send("Calibration reset. Start moving the device to calibrate the magnetometer.")
-end
-
-function load_calibration()
-    local status, cal_data = pcall(require, "calibration_result")
-    if status then
-        calibration = cal_data
-        if calibration.calibrating then
-            send("Calibration loaded. Start moving the device to calibrate the magnetometer.")
-        else
-            send("Calibration loaded. Offsets: " .. calibration.offsetX .. ", " .. calibration.offsetY .. ", " .. calibration.offsetZ)
-        end
-    else
-        reset_calibration()
-    end
-end
-
-function save_calibration()
-    local file = frame.file.open("calibration_result.lua", "write")
-    if file then
-        file:write("return " .. print_table(calibration))
-        file:close()
-        send("Calibration saved.")
-    else
-        send("Failed to save calibration.")
-    end
-end
-
-load_calibration()
 
 function calculateTiltCompensatedHeading(imu)
+    local calibration = settings.calibration
     if calibration.calibrating then
         if calibration.nPoints >= 200 then
             calibration.calibrating = false
@@ -109,7 +129,7 @@ function calculateTiltCompensatedHeading(imu)
             calibration.offsetY = -(calibration.minY + calibration.maxY) / 2
             calibration.offsetZ = -(calibration.minZ + calibration.maxZ) / 2
             send("Calibration complete. Offsets: " .. calibration.offsetX .. ", " .. calibration.offsetY .. ", " .. calibration.offsetZ)
-            save_calibration()
+            save_settings()
         else
             calibration.minX = math.min(imu.compass.x, calibration.minX)
             calibration.maxX = math.max(imu.compass.x, calibration.maxX)
@@ -211,6 +231,32 @@ function camera_click()
     end
 end
 
+function edit_display_settings()
+    local m = {items={
+        {text="Cancel", callback=function()
+            send("Display settings menu cancelled.")
+            menu = nil
+        end}
+    }}
+    for k,v in pairs(settings.display_settings) do
+        if v then
+            what = "Disable " .. k
+        else
+            what = "Enable " .. k
+        end
+        m.items[#m.items + 1] = {
+            text=what,
+            callback=function()
+                settings.display_settings[k] = not v
+                send("Display setting " .. k .. " set to " .. tostring(settings.display_settings[k]))
+                edit_display_settings()
+                menu.cursor = m.cursor
+            end
+        }
+    end
+    menu = m
+end
+
 function single_tap_callback()
     menu = {
         items={
@@ -220,65 +266,36 @@ function single_tap_callback()
             end},
             {text="Capture image", callback=camera_click},
             {text="Reset calibration", callback=reset_calibration},
-            {text="Load calibration", callback=load_calibration},
-            {text="Save calibration", callback=save_calibration},
+            {text="Load settings", callback=load_settings},
+            {text="Save settings", callback=save_settings},
             {text="Run auto exposure", callback=auto_exposure},
             {text="Sleep Frame (tap to wake)", callback=function()
                 send("Sleeping Frame...")
                 frame.sleep()
             end},
             {text="Toggle microphone", callback=function()
-                send_mic = not send_mic
-                if send_mic then
+                settings.send_mic = not settings.send_mic
+                if settings.send_mic then
                     send("Microphone enabled.")
                 else
                     send("Microphone disabled.")
                 end
             end},
-            {text="Edit Display Settings", callback=function()
-                local m = {items={
-                    {text="Cancel", callback=function()
-                        send("Display settings menu cancelled.")
-                        menu = nil
-                    end}
-                }}
-                for k,v in pairs(display_settings) do
-                    if v then
-                        what = "Disable " .. k
-                    else
-                        what = "Enable " .. k
-                    end
-                    m.items[#m.items + 1] = {
-                        text=what .. " " .. tostring(v),
-                        callback=function()
-                            display_settings[k] = not v
-                            send("Display setting " .. k .. " set to " .. tostring(display_settings[k]))
-
-                            local settings_file = frame.file.open("display_settings.lua", "write")
-                            if settings_file then
-                                settings_file:write("return " .. print_table(display_settings))
-                                settings_file:close()
-                            end
-                        end
-                    }
-                end
-                menu = m
-            end},
+            {text="Edit Display Settings", callback=edit_display_settings},
         },
         cursor=0.01
     }
 end
-
-exposure_settings = {
-    exposure=0.9,
-    shutter_limit=100
-}
 
 function double_tap_callback()
 
 end
 
 function auto_exposure()
+    if last_tap == nil then
+        send("Auto exposure cancelled - no tap detected.")
+        return
+    end
     send("Double tap detected - last tap was at " .. (frame.time.utc() - last_tap))
     local run = 0
     local last_expose = frame.time.utc()
@@ -286,7 +303,7 @@ function auto_exposure()
         local time = frame.time.utc()
         if time - last_expose > 0.1 then
             run = run + 1
-            frame.camera.auto(exposure_settings)
+            frame.camera.auto(settings.exposure)
             last_expose = time
 
             if run > 30 then
@@ -336,6 +353,9 @@ function handle_data(data)
     end
 end
 
+local just_connected = nil
+local just_connected_message = {message=nil, color=nil}
+
 data.parsers[MESSAGE_BASE] = function(data) return data end
 data.parsers[MESSAGE_BASE + 1] = function(data)
     local parts = {}
@@ -344,6 +364,11 @@ data.parsers[MESSAGE_BASE + 1] = function(data)
     end
     return {tonumber(parts[1]), parts[2]}
 end
+data.parsers[MESSAGE_BASE + 5] = function(data) return data end
+data.parsers[MESSAGE_BASE + 6] = function(data) return data end
+
+local response = ""
+response_lines = {}
 
 function process_bluetooth()
     local ready = data.process_raw_items()
@@ -362,6 +387,39 @@ function process_bluetooth()
             data.app_data[MESSAGE_BASE + 1] = nil
             rx = rx + 40
             collectgarbage('collect')
+        end
+        if data.app_data[MESSAGE_BASE + 5] ~= nil then
+            local msg = data.app_data[MESSAGE_BASE + 5]
+            local idx = msg:find(",")
+            if idx then
+                just_connected_message.color = msg:sub(1, idx - 1)
+                just_connected_message.message = msg:sub(idx + 1)
+            else
+                just_connected_message.color = "SEABLUE"
+                just_connected_message.message = msg
+            end
+            just_connected = frame.time.utc()
+            
+            data.app_data[MESSAGE_BASE + 5] = nil
+            rx = rx + #msg + 1
+            collectgarbage('collect')
+        end
+        if data.app_data[MESSAGE_BASE + 6] ~= nil then
+            response = response .. " " .. data.app_data[MESSAGE_BASE + 6]
+            if #response > 1000 then
+                response = response:sub(-1000)
+            end
+            local lines = {}
+            for word in response:gmatch("%S+") do
+                local last = lines[#lines]
+                if not last or #last + #word + 1 > 25 then
+                    table.insert(lines, word)
+                else
+                    lines[#lines] = last .. " " .. word
+                end
+            end
+            response_lines = lines
+            data.app_data[MESSAGE_BASE + 6] = nil
         end
     end
 end
@@ -407,30 +465,13 @@ function display_menu(imu)
     frame.display.text(">", 1, 151, {color="YELLOW"})
 end
 
-display_settings = {
-    compass=true,
-    battery=true,
-    date=true,
-    tx_rx=true
-}
-
-local status, display_settings_saved = pcall(require, "display_settings")
-if status then
-    for k,v in pairs(display_settings_saved) do
-        if display_settings[k] ~= nil then
-            display_settings[k] = v
-        end
-    end
-    display_settings_saved = nil
-end
-
 function display_screen(last_bat, imu)
     local bat = frame.battery_level()
     -- frame.display.bitmap(1, yOffset, width, 4, 0, bitmap)
     local screenDegrees = 20
     local offsetY = 0
-    if display_settings.compass then
-        if not calibration.calibrating then
+    if settings.display_settings.compass then
+        if not settings.calibration.calibrating then
             for off=0,screenDegrees do
                 local char = nil
                 local color = "WHITE"
@@ -456,8 +497,8 @@ function display_screen(last_bat, imu)
             end
             offsetY = offsetY + 50
         else
-            if calibration.nPoints > 0 then
-                frame.display.text("Calibrating... " .. calibration.nPoints .. " points", 1, 1 + offsetY)
+            if settings.calibration.nPoints > 0 then
+                frame.display.text("Calibrating... " .. settings.calibration.nPoints .. " points", 1, 1 + offsetY)
                 offsetY = offsetY + 50
             end
             frame.display.text("Please rotate your frame around", 1, 1 + offsetY)
@@ -470,14 +511,14 @@ function display_screen(last_bat, imu)
         frame.display.text("REC", 500, 50, {color="RED"})
     end
 
-    if display_settings.battery then
+    if settings.display_settings.battery then
         frame.display.text("Battery: [", 1, 1 + offsetY)
         frame.display.text(string.rep("|", last_bat // 5), 180, 1 + offsetY, {color="RED"})
         frame.display.text("] " .. string.format("%d", last_bat), 360, 1 + offsetY)
         offsetY = offsetY + 50
     end
 
-    if display_settings.date then
+    if settings.display_settings.date then
         local frame_now = frame.time.date()
         local weekday = ({
             "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
@@ -496,9 +537,25 @@ function display_screen(last_bat, imu)
         offsetY = offsetY + 50
     end
 
-    if display_settings.tx_rx then
+    if settings.display_settings.tx_rx then
         frame.display.text("TX: " .. math.ceil(tx / 1024) .. " RX: " .. math.ceil(rx / 1024), 1, offsetY + 1)
         offsetY = offsetY + 50
+    end
+
+    if just_connected ~= nil and frame.time.utc() - just_connected < 5 and just_connected_message.message then
+        frame.display.text(just_connected_message.message, 10, offsetY + 1, {color=just_connected_message.color or "SEABLUE"})
+        offsetY = offsetY + 50
+    end
+
+    if settings.display_settings.llm_response and response ~= nil then
+        local maxY = 350
+        local lines = response_lines
+        for i=#lines,1,-1 do
+            if maxY - 40 * (#lines - i + 1) < offsetY then
+                break
+            end
+            frame.display.text(lines[i] or "", 1, maxY - 40 * (#lines - i + 1), {color="WHITE"})
+        end
     end
     collectgarbage('collect')
 end
@@ -516,7 +573,6 @@ local yOffset = 80
 collectgarbage('collect')
 
 frame.imu.tap_callback(tap_callback)
-send_mic = send_mic or true
 mic_started = mic_started or false
 
 mic_settings = {sample_rate=16000, bit_depth=16}
@@ -531,7 +587,7 @@ while true do
     local _start = frame.time.utc()
     process_bluetooth()
     local imu
-    if (calibration.calibrating and i % 20 == 0) or i % 30 == 0 then
+    if (settings.calibration.calibrating and i % 20 == 0) or i % 30 == 0 then
         imu = frame.imu.direction()
         imu.heading = calculateTiltCompensatedHeading(frame.imu.raw())
     end
@@ -570,13 +626,13 @@ while true do
         end
     end
 
-    if send_mic and not mic_started then
+    if settings.send_mic and not mic_started then
         mic_started = true
         local success = pcall(frame.microphone.start, mic_settings)
-    elseif not send_mic and mic_started then
+    elseif not settings.send_mic and mic_started then
         mic_started = false
         pcall(frame.microphone.stop)
-    elseif send_mic then
+    elseif settings.send_mic then
         while true do
             local success, data = pcall(frame.microphone.read, frame.bluetooth.max_length() - 1)
             if not success then
