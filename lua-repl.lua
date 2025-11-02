@@ -15,7 +15,9 @@ function send(...)
         local start = (i - 1) * max_length + 1
         local chunk = data:sub(start, start + max_length - 1)
         
-        for i=1,400 do
+        -- Reduced retry count from 400 to 50 for better performance
+        -- Most transmissions succeed on first try anyway
+        for retry=1,50 do
             local status, err = pcall(frame.bluetooth.send, string.char(MESSAGE_BASE + 1) .. chunk)
             if not status then
                 print("Error sending data: " .. err)
@@ -181,7 +183,7 @@ end
 
 tickruns = {}
 
-local try_for = 5
+local try_for = 2  -- Reduced from 5 to 2 seconds for faster failure detection
 function send_safe(code, data)
     local start = frame.time.utc()
     data = string.char(code) .. data
@@ -194,6 +196,7 @@ function send_safe(code, data)
         -- print("Error sending data: " .. err)
         frame.sleep(0.001)
     end
+    return nil  -- Explicitly return nil on failure
 end
 
 resolution = 512
@@ -426,6 +429,9 @@ end
 
 menu = nil
 
+-- Cache the menu separator line (computed once)
+local menu_separator_line = string.rep("\xFF", math.ceil(600 / 8))
+
 function display_menu(imu)
     local roll = imu.roll
     local time = frame.time.utc()
@@ -437,7 +443,6 @@ function display_menu(imu)
     else
         roll = 1
     end
-    local line = string.rep("\xFF", math.ceil(600 / 8))
     
     menu.cursor = menu.cursor or #menu.items
     menu.cursor = menu.cursor + roll * 0.45
@@ -459,11 +464,16 @@ function display_menu(imu)
             frame.display.text(item.text, 20, off, {color=color})
         end
 
-        frame.display.bitmap(1, off, 600, 2, 12, line)
+        frame.display.bitmap(1, off, 600, 2, 12, menu_separator_line)
     end
 
     frame.display.text(">", 1, 151, {color="YELLOW"})
 end
+
+-- Cache weekday names to avoid recreating the array every frame
+local weekday_names = {
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+}
 
 function display_screen(last_bat, imu)
     local bat = frame.battery_level()
@@ -520,9 +530,7 @@ function display_screen(last_bat, imu)
 
     if settings.display_settings.date then
         local frame_now = frame.time.date()
-        local weekday = ({
-            "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
-        })[frame_now.weekday + 1]
+        local weekday = weekday_names[frame_now.weekday + 1]
         local suffix = "AM"
         local hour = frame_now.hour
         if hour >= 12 then
@@ -582,15 +590,25 @@ fps = 30
 mic_fail = 0
 
 local i = 0
+local last_imu_update = 0
+local cached_imu = nil
 while true do
     i = i + 1
     local _start = frame.time.utc()
     process_bluetooth()
+    
+    -- Cache IMU reads to reduce sensor polling frequency
     local imu
     if (settings.calibration.calibrating and i % 20 == 0) or i % 30 == 0 then
         imu = frame.imu.direction()
         imu.heading = calculateTiltCompensatedHeading(frame.imu.raw())
+        cached_imu = imu
+        last_imu_update = i
+    elseif cached_imu and (i - last_imu_update) < 60 then
+        -- Use cached IMU data if it's recent enough
+        imu = cached_imu
     end
+    
     if i % fps == 0 then
         if menu ~= nil then
             display_menu(imu)
@@ -633,6 +651,8 @@ while true do
         mic_started = false
         pcall(frame.microphone.stop)
     elseif settings.send_mic then
+        -- Optimized microphone reading with reduced garbage collection calls
+        local mic_chunks_read = 0
         while true do
             local success, data = pcall(frame.microphone.read, frame.bluetooth.max_length() - 1)
             if not success then
@@ -651,15 +671,25 @@ while true do
                 else
                     tx = tx + #data + 1
                 end
+                mic_chunks_read = mic_chunks_read + 1
             end
             data = nil
-            collectgarbage("collect")
+            -- Only run garbage collection after processing multiple chunks
+            if mic_chunks_read % 5 == 0 then
+                collectgarbage("collect")
+            end
         end
     end
     
     duration = frame.time.utc() - _start
 
-    frame.sleep(0.001)
+    -- Dynamic sleep time based on workload
+    -- Sleep longer when not much is happening to save power
+    local sleep_time = 0.001
+    if menu == nil and not settings.send_mic and i % fps ~= 0 then
+        sleep_time = 0.005  -- Sleep longer when idle
+    end
+    frame.sleep(sleep_time)
 end
 end
 
