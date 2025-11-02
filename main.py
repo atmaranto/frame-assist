@@ -127,19 +127,23 @@ async def main(args, model=None, tools=None, chat_history=None):
             image_data.append(bytes(data[1:]))
             print(f"Received {len(data)} bytes of image data, total {sum(len(d) for d in image_data)} bytes")
 
-        # Lazy load WhisperModel - only create it when actually needed
+        # Create a lazy wrapper for WhisperModel to avoid loading it at startup
         # This saves significant startup time and memory if microphone is not used
-        whisper_model = None
+        class LazyWhisperModel:
+            def __init__(self, model_size, device, local_files_only):
+                self.model_size = model_size
+                self.device = device
+                self.local_files_only = local_files_only
+                self._model = None
+            
+            def __getattr__(self, name):
+                if self._model is None:
+                    from faster_whisper import WhisperModel
+                    print("Loading WhisperModel (first use)...")
+                    self._model = WhisperModel(self.model_size, device=self.device, local_files_only=self.local_files_only)
+                return getattr(self._model, name)
         
-        def get_whisper_model():
-            nonlocal whisper_model
-            if whisper_model is None:
-                from faster_whisper import WhisperModel
-                print("Loading WhisperModel (first use)...")
-                whisper_model = WhisperModel(args.model_size, device="auto", local_files_only=False)
-            return whisper_model
-        
-        assistant = Assistant(llm=model, model=get_whisper_model(), wake_words=args.wake_words.split(","), true_wake_word="hey frame", configuration={"session_id": "frame"})
+        assistant = Assistant(llm=model, model=LazyWhisperModel(args.model_size, "auto", False), wake_words=args.wake_words.split(","), true_wake_word="hey frame", configuration={"session_id": "frame"})
         
         # Only initialize audio saving if explicitly requested
         audio_proc = None
@@ -224,8 +228,8 @@ async def main(args, model=None, tools=None, chat_history=None):
                     partial_word = ""
             else:
                 partial_word += part
-                # More efficient punctuation check using set intersection
-                if PUNCTUATION_SET & set(partial_word):
+                # More efficient punctuation check - avoids creating a new set on every call
+                if any(c in PUNCTUATION_SET for c in partial_word):
                     words = partial_word.strip()
                     sents = SENTENCE_SPLIT_PATTERN.split(words)
                     for sent in sents:

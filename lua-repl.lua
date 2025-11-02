@@ -607,6 +607,12 @@ while true do
     elseif cached_imu and (i - last_imu_update) < 60 then
         -- Use cached IMU data if it's recent enough
         imu = cached_imu
+    else
+        -- Refresh IMU data if cache is too old or doesn't exist
+        imu = frame.imu.direction()
+        imu.heading = calculateTiltCompensatedHeading(frame.imu.raw())
+        cached_imu = imu
+        last_imu_update = i
     end
     
     if i % fps == 0 then
@@ -651,7 +657,7 @@ while true do
         mic_started = false
         pcall(frame.microphone.stop)
     elseif settings.send_mic then
-        -- Optimized microphone reading with reduced garbage collection calls
+        -- Optimized microphone reading with incremental garbage collection
         local mic_chunks_read = 0
         while true do
             local success, data = pcall(frame.microphone.read, frame.bluetooth.max_length() - 1)
@@ -674,9 +680,10 @@ while true do
                 mic_chunks_read = mic_chunks_read + 1
             end
             data = nil
-            -- Only run garbage collection after processing multiple chunks
-            if mic_chunks_read % 5 == 0 then
-                collectgarbage("collect")
+            -- Use incremental garbage collection to avoid stuttering
+            -- Only run a step every 10 chunks to balance memory and performance
+            if mic_chunks_read % 10 == 0 then
+                collectgarbage("step", 100)
             end
         end
     end
