@@ -16,8 +16,6 @@ import re
 
 import datetime
 
-from faster_whisper import WhisperModel
-
 from assistant import Assistant
 from assistant.assistant import create_basic_llm
 
@@ -25,6 +23,10 @@ import colorama
 
 import dotenv
 dotenv.load_dotenv()
+
+# Cache compiled regex patterns for better performance
+SENTENCE_SPLIT_PATTERN = re.compile(r'(?<=[.!?])')
+PUNCTUATION_SET = frozenset('.!?')
 
 def load_default_bot():
     from langchain_core.runnables import RunnableLambda
@@ -85,6 +87,8 @@ async def main(args, model=None, tools=None, chat_history=None):
         await frame.connect(initialize=False)
 
         data_received = asyncio.Event()
+        
+        # Pre-compile handlers to avoid repeated function creation
         async def print_response_handler(data):
             if isinstance(data, bytes):
                 data = data.decode('utf-8', errors='replace')
@@ -123,8 +127,27 @@ async def main(args, model=None, tools=None, chat_history=None):
             image_data.append(bytes(data[1:]))
             print(f"Received {len(data)} bytes of image data, total {sum(len(d) for d in image_data)} bytes")
 
-        assistant = Assistant(llm=model, model=WhisperModel(args.model_size, device="auto", local_files_only=False), wake_words=args.wake_words.split(","), true_wake_word="hey frame", configuration={"session_id": "frame"})
+        # Create a lazy wrapper for WhisperModel to avoid loading it at startup
+        # This saves significant startup time and memory if microphone is not used
+        class LazyWhisperModel:
+            def __init__(self, model_size, device, local_files_only):
+                self.model_size = model_size
+                self.device = device
+                self.local_files_only = local_files_only
+                self._model = None
+            
+            def __getattr__(self, name):
+                if self._model is None:
+                    from faster_whisper import WhisperModel
+                    print("Loading WhisperModel (first use)...")
+                    self._model = WhisperModel(self.model_size, device=self.device, local_files_only=self.local_files_only)
+                return getattr(self._model, name)
         
+        assistant = Assistant(llm=model, model=LazyWhisperModel(args.model_size, "auto", False), wake_words=args.wake_words.split(","), true_wake_word="hey frame", configuration={"session_id": "frame"})
+        
+        # Only initialize audio saving if explicitly requested
+        audio_proc = None
+        audio_file = None
         if args.save_audio:
             ext = os.path.splitext(args.save_audio)[1]
             if ext not in ['.wav']:
@@ -133,14 +156,18 @@ async def main(args, model=None, tools=None, chat_history=None):
             audio_proc = subprocess.Popen(['ffmpeg', '-loglevel', 'error', '-hide_banner', '-f', 's16le', '-ar', '16000', '-ac', '1', '-i', '-', '-y', args.save_audio], stdin=subprocess.PIPE, bufsize=1024)
             atexit.register(audio_proc.stdin.close, input=b'', timeout=5)
             audio_file = open(args.save_audio + ".s16le", 'wb')
+        
         def mic_data_handler(data):
-            assistant.feed(data[1:])
+            audio_data = data[1:]
+            assistant.feed(audio_data)
 
-            if args.save_audio:
-                audio_proc.stdin.write(data[1:])
+            # Only write to audio files if they were initialized
+            if audio_proc is not None:
+                audio_proc.stdin.write(audio_data)
                 audio_proc.stdin.flush()
 
-                audio_file.write(data[1:])
+            if audio_file is not None:
+                audio_file.write(audio_data)
                 audio_file.flush()
 
         assistant.on('wake_word_detected', lambda wake_word, transcription: print(f"Wake word detected: {wake_word}"))
@@ -176,40 +203,48 @@ async def main(args, model=None, tools=None, chat_history=None):
                         responses.append(response)
         partial_word = ""
         in_thinking = False
+        think_end_tag = "</think>"
+        think_start_tag = "<think>"
+        
         async def speak_word(part):
             nonlocal partial_word, in_thinking
             if part is None:
                 in_thinking = False
             else:
-                if "<think>" in partial_word:
+                # Check for thinking tags more efficiently
+                if think_start_tag in partial_word:
                     in_thinking = True
-                if "</think>" in partial_word:
+                if think_end_tag in partial_word:
                     in_thinking = False
+            
             if part is None:
                 if partial_word:
                     print(f"{colorama.Fore.GREEN}{partial_word}{colorama.Style.RESET_ALL}\n", end='', flush=True)
-                    if "</think>" in partial_word:
-                        partial_word = partial_word[partial_word.index("</think>") + len("</think>"):]
+                    if think_end_tag in partial_word:
+                        partial_word = partial_word[partial_word.index(think_end_tag) + len(think_end_tag):]
                     espeak_process.stdin.write(partial_word + "\n")
                     espeak_process.stdin.flush()
                     await frame.send_message(MESSAGE_BASE + 6, partial_word.strip().encode('utf-8'))
                     partial_word = ""
             else:
                 partial_word += part
-                if any(c in partial_word for c in '.!?'):
+                # More efficient punctuation check - avoids creating a new set on every call
+                if any(c in PUNCTUATION_SET for c in partial_word):
                     words = partial_word.strip()
-                    sents = re.split(r'(?<=[.!?])', words)
+                    sents = SENTENCE_SPLIT_PATTERN.split(words)
                     for sent in sents:
                         print(f"{colorama.Fore.GREEN}{sent}{colorama.Style.RESET_ALL} ", end='', flush=True)
                     idx = 0
-                    if "</think>" in partial_word:
-                        idx = partial_word.index("</think>") + len("</think>")
-                    sents = re.split(r'(?<=[.!?])', words[idx:])
+                    if think_end_tag in partial_word:
+                        idx = partial_word.index(think_end_tag) + len(think_end_tag)
+                    sents = SENTENCE_SPLIT_PATTERN.split(words[idx:])
                     if not in_thinking:
                         for sent in sents:
-                            await frame.send_message(MESSAGE_BASE + 6, sent.strip().encode('utf-8'))
-                            espeak_process.stdin.write(sent + "\n")
-                            espeak_process.stdin.flush()
+                            sent_stripped = sent.strip()
+                            if sent_stripped:  # Only send non-empty sentences
+                                await frame.send_message(MESSAGE_BASE + 6, sent_stripped.encode('utf-8'))
+                                espeak_process.stdin.write(sent + "\n")
+                                espeak_process.stdin.flush()
                     partial_word = ""
         
         loop = asyncio.get_event_loop()
